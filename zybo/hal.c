@@ -22,7 +22,7 @@ static struct {
     u4_t ticks;
 } HAL;
 
-
+// ------------------------------------------------------------------------
 // GPIO
 #define RST_PIN 9
 #define DIO0_PIN 14
@@ -74,8 +74,6 @@ static void hal_io_init () {
     XGpioPs_IntrEnablePin(&gpio_ps, DIO1_PIN);
 
     XSetupInterruptSystem(&gpio_ps, &XGpioPs_IntrHandler, cfg_ptr->IntrId, cfg_ptr->IntrParent, XINTERRUPT_DEFAULT_PRIORITY);
-
-    return;
 }
 
 void hal_pin_rxtx (u1_t val) {
@@ -83,20 +81,83 @@ void hal_pin_rxtx (u1_t val) {
 }
 
 void hal_pin_rst (u1_t val) {
-    return;
+    if (val == 0 || val == 1) {
+        XGpioPs_WritePin(&gpio_ps, RST_PIN, val);
+    }
 }
 
+// ------------------------------------------------------------------------
 
 
+// ------------------------------------------------------------------------
 // SPI
-static void hal_spi_init() {
-    return;
+static XSpiPs spi_ps;
+
+static void hal_spi_init () {
+    XSpiPs_Config *cfg_ptr;
+
+    cfg_ptr = XSpiPs_LookupConfig(XPAR_XSPIPS_0_BASEADDR);
+
+    XSpiPs_CfgInitialize((&spi_ps), cfg_ptr, cfg_ptr->BaseAddr);
+
+    XSpiPs_SetOptions(&spi_ps, XSPIPS_MASTER_OPTION | XSPIPS_FORCE_SSELECT_OPTION);
 }
 
 u1_t hal_spi (u1_t out) {
-    return (u1_t) 0;
+    u1_t send = out;
+    u1_t recv;
+    XSpiPs_PolledTransfer(&spi_ps, &send, &recv, 1); // Transfer one byte
+    return recv;
 }
 
 void hal_pin_nss (u1_t val) {
-    return;
+    XSpiPs_SetSlaveSelect(&spi_ps, val);
 }
+
+// ------------------------------------------------------------------------
+
+
+// ------------------------------------------------------------------------
+// IRQ
+void hal_disableIRQs () {
+
+}
+
+void hal_enableIRQs () {
+
+}
+
+void hal_sleep () {
+
+}
+// ------------------------------------------------------------------------
+
+
+// ------------------------------------------------------------------------
+// Timer
+
+static void hal_time_init () {
+}
+
+u4_t hal_ticks () {
+}
+
+void hal_waitUntil (u4_t time) {
+
+}
+
+u1_t hal_checkTimer (u4_t targettime) {
+
+}
+
+// ------------------------------------------------------------------------
+
+void hal_init () {
+
+}
+
+void hal_failed () {
+
+}
+
+void hal_sleep
