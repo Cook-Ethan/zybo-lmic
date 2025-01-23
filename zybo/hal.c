@@ -16,6 +16,7 @@
 #include "xparameters.h"
 #include "xgpiops.h"
 #include "xspips.h"
+#include "xttcps.h"
 
 static struct {
     int irqlevel;
@@ -83,6 +84,8 @@ void hal_pin_rxtx (u1_t val) {
 void hal_pin_rst (u1_t val) {
     if (val == 0 || val == 1) {
         XGpioPs_WritePin(&gpio_ps, RST_PIN, val);
+    } else {
+        XGpioPs_SetDirectionPin(&gpio_ps, RST_PIN, 0);
     }
 }
 
@@ -120,44 +123,120 @@ void hal_pin_nss (u1_t val) {
 // ------------------------------------------------------------------------
 // IRQ
 void hal_disableIRQs () {
-
+    // Disable irqs
+    XTtcPs_DisableInterrupts(&ttc_ps, XTTCPS_IXR_MATCH_0_MASK | XTTCPS_IXR_CNT_OVR_MASK);
+    XGpioPs_IntrDisablePin(&gpio_ps, DIO0_PIN);
+    XGpioPs_IntrDisablePin(&gpio_ps, DIO1_PIN);
+    HAL.irqlevel++;
 }
 
 void hal_enableIRQs () {
-
+    HAL.irqlevel--;
+    if (HAL.irqlevel == 0) {
+        // enable irqs
+        XTtcPs_EnableInterrupts(&ttc_ps, XTTCPS_IXR_MATCH_0_MASK | XTTCPS_IXR_CNT_OVR_MASK);
+        XGpioPs_IntrEnablePin(&gpio_ps, DIO0_PIN);
+        XGpioPs_IntrEnablePin(&gpio_ps, DIO1_PIN);
+    }
 }
 
 void hal_sleep () {
-
+    // Sleep not configured
+    (void);
 }
 // ------------------------------------------------------------------------
 
 
 // ------------------------------------------------------------------------
 // Timer
+static XTtcPs ttc_ps;
+
+static void timer_irq_handler(void *CallBackRef, u32 StatusEvent) {
+    if (XTtcPs_GetInterruptStatus(&ttc_ps) & XTTCPS_IXR_CNT_OVR_MASK) {
+        HAL.ticks++;
+    }
+    if (XTtcPs_GetInterruptStatus(&ttc_ps) & XTTCPS_IXR_MATCH_0_MASK) {
+        // do nothing, only wake up cpu
+    }
+    XTtcPs_ClearInterruptStatus(&ttc_ps, XTTCPS_IXR_CNT_OVR_MASK & XTTCPS_IXR_MATCH_0_MASK);
+}
 
 static void hal_time_init () {
+    XTtcPs_Config *cfg_ptr;
+
+    cfg_ptr = XTtcPs_LookupConfig(XPAR_XTTCPS_0_BASEADDR);
+    
+    XTtcPs_CfgInitialize(&ttc_ps, cfg_ptr, cfg_ptr->BaseAddr);
+
+    XTtcPs_SetOptions(&ttc_ps, XTTCPS_OPTION_WAVE_DISABLE | XTTCPS_OPTION_MATCH_MODE);
+    XTtcPs_SetPrescaler(&ttc_ps, 11); // CPU_Clk / 2^(11 + 1) = 111MHz / 4096 = 27.127 MHz
+
+    XTtcPs_SetStatusHandler(&ttc_ps, &ttc_ps, (XTtcPs_StatusHandler) timer_irq_handler);
+
+    XSetupInterruptSystem(&ttc_ps, XTtcPs_InterruptHandler, cfg_ptr->IntrId[0], cfg_ptr->IntrParent, XINTERRUPT_DEFAULT_PRIORITY);
+    XTtcPs_EnableInterrupts(&ttc_ps, XTTCPS_IXR_CNT_OVR_MASK);
+
+    XTtcPs_Start(&ttc_ps);
 }
 
 u4_t hal_ticks () {
+    hal_disableIRQs();
+    u4_t t = HAL.ticks;
+    u2_t cnt = XTtcPs_GetCounterValue(&ttc_ps);
+    if (XTtcPs_GetInterruptStatus(&ttc_ps) & XTTCPS_IXR_CNT_OVR_MASK) {
+        cnt = XTtcPs_GetCounterValue(&ttc_ps);
+        t++;
+    }
+    hal_enableIRQs();
+    return (t<<16)|cnt;    
+}
+
+static u2_t deltaticks (u4_t time) {
+    u4_t t = hal_ticks();
+    s4_t d = time - t;
+    if (d <= 0) return 0; // in the past
+    if ((d >> 16) != 0) return 0xFFFF; // far ahead
+    return (u2_t) d;
 }
 
 void hal_waitUntil (u4_t time) {
-
+    while(deltaticks(time) != 0); // busy wait until timestamp
 }
 
-u1_t hal_checkTimer (u4_t targettime) {
-
+u1_t hal_checkTimer (u4_t time) {
+    u2_t dt;
+    XTtcPs_ClearInterruptStatus(&ttc_ps, XTTCPS_IXR_CNT_OVR_MASK);
+    dt = deltaticks(time);
+    if (dt < 5) { // event is now
+        XTtcPs_DisableInterrupts(&ttc_ps, XTTCPS_IXR_MATCH_0_MASK);
+        return 1;
+    } else {
+        u2_t cnt = XTtcPs_GetCounterValue(&ttc_ps);
+        XTtcPs_SetMatchValue(&ttc_ps, 0, cnt + dt);
+        XTtcPs_EnableInterrupts(&ttc_ps, XTTCPS_IXR_MATCH_0_MASK);
+        return 0;
+    }
 }
 
 // ------------------------------------------------------------------------
 
 void hal_init () {
+    memset(&HAL, 0x00, sizeof(HAL));
+    hal_disableIRQs();
 
+    hal_io_init();
+
+    hal_spi_init();
+
+    hal_time_init();
+
+    hal_enableIRQs();
 }
 
 void hal_failed () {
-
+    hal_disableIRQs();
+    hal_sleep();
+    while(1);
 }
 
 void hal_sleep
